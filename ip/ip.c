@@ -36,18 +36,21 @@ int timestamp;
 int force;
 int max_flush_loops = 10;
 int batch_mode;
+int shell_mode;
+char *shell_prompt;
 int numeric;
 bool do_all;
 
 struct rtnl_handle rth = { .fd = -1 };
 
-static void usage(void) __attribute__((noreturn));
+//static void usage(void) __attribute__((noreturn));
 
 static void usage(void)
 {
 	fprintf(stderr,
 		"Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n"
 		"       ip [ -force ] -batch filename\n"
+		"       ip -shell\n"
 		"where  OBJECT := { link | address | addrlabel | route | rule | neigh | ntable |\n"
 		"                   tunnel | tuntap | maddress | mroute | mrule | monitor | xfrm |\n"
 		"                   netns | l2tp | fou | macsec | tcp_metrics | token | netconf | ila |\n"
@@ -60,7 +63,8 @@ static void usage(void)
 		"                    -o[neline] | -t[imestamp] | -ts[hort] | -b[atch] [filename] |\n"
 		"                    -rc[vbuf] [size] | -n[etns] name | -N[umeric] | -a[ll] |\n"
 		"                    -c[olor]}\n");
-	exit(-1);
+	if (!shell_mode)
+		exit(-1);
 }
 
 static int do_help(int argc, char **argv)
@@ -120,6 +124,8 @@ static int do_cmd(const char *argv0, int argc, char **argv)
 	return EXIT_FAILURE;
 }
 
+#define PRINT_SHELL_MODE_PROMPT()	if (shell_mode) printf("%s ", shell_prompt)
+
 static int batch(const char *name)
 {
 	char *line = NULL;
@@ -143,24 +149,35 @@ static int batch(const char *name)
 		return EXIT_FAILURE;
 	}
 
+	PRINT_SHELL_MODE_PROMPT();
+
 	cmdlineno = 0;
 	while (getcmdline(&line, &len, stdin) != -1) {
+		if ((strcmp(line, "quit\n") == 0) \
+		    || (strcmp(line, "exit\n") == 0))
+			break;
+
 		char *largv[100];
 		int largc;
 
 		preferred_family = orig_family;
 
 		largc = makeargs(line, largv, 100);
-		if (largc == 0)
+		if (largc == 0) {
+			PRINT_SHELL_MODE_PROMPT();
 			continue;	/* blank line */
+		}
 
 		if (do_cmd(largv[0], largc, largv)) {
 			fprintf(stderr, "Command failed %s:%d\n",
 				name, cmdlineno);
-			ret = EXIT_FAILURE;
-			if (!force)
+			if (!force && !shell_mode) {
+				ret = EXIT_FAILURE;
 				break;
+			}
 		}
+
+		PRINT_SHELL_MODE_PROMPT();
 	}
 	if (line)
 		free(line);
@@ -264,6 +281,14 @@ int main(int argc, char **argv)
 			if (argc <= 1)
 				usage();
 			batch_file = argv[1];
+		} else if (matches(opt, "-shell") == 0) {
+			argc--;
+			if (argc > 1)
+				usage(); // -shell must be the last argument.
+			batch_file = "-";
+			++shell_mode;
+			if ((shell_prompt = getenv("IP_PS1")) == NULL)
+				asprintf(&shell_prompt, "ip:%%");
 		} else if (matches(opt, "-brief") == 0) {
 			++brief;
 		} else if (matches(opt, "-json") == 0) {
